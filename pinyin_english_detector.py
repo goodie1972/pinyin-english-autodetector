@@ -4,7 +4,8 @@
 基于规则 + 词典匹配的智能识别
 """
 
-import re
+from english_dictionary import get_extended_english_words
+from user_preference import get_learner
 from typing import Tuple, Optional
 from dataclasses import dataclass
 
@@ -48,246 +49,29 @@ class PinyinEnglishDetector:
         'yi', 'wu', 'yu', 'ye', 'yue', 'yuan', 'yin', 'yun', 'ying'
     }
 
-    def __init__(self):
+    def __init__(self, enable_learning=True):
         self.english_words = self._load_english_words()
         self.pinyin_dict = self._build_pinyin_dict()
+        self.learner = get_learner() if enable_learning else None
+        # 缓存
+        self._cache = {}
+        self._cache_max_size = 1000
+
+    def _get_from_cache(self, text: str):
+        """从缓存获取结果"""
+        return self._cache.get(text)
+
+    def _add_to_cache(self, text: str, result):
+        """添加结果到缓存"""
+        if len(self._cache) >= self._cache_max_size:
+            # 简单LRU：清空一半缓存
+            self._cache = dict(list(self._cache.items())[self._cache_max_size//2:])
+        self._cache[text] = result
 
     def _load_english_words(self) -> set:
         """加载常用英文单词词典"""
-        # 核心高频词（约500个）
-        common_words = {
-            # 代词 & be动词
-            'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them',
-            'my', 'your', 'his', 'her', 'its', 'our', 'their', 'mine', 'yours', 'ours', 'theirs',
-            'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-            'this', 'that', 'these', 'those',
-
-            # 冠词 & 介词
-            'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
-            'by', 'from', 'up', 'about', 'into', 'over', 'after', 'under', 'again', 'further',
-            'then', 'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'each',
-
-            # 高频动词
-            'have', 'has', 'had', 'do', 'does', 'did', 'done', 'doing',
-            'get', 'gets', 'got', 'gotten', 'make', 'makes', 'made', 'making',
-            'know', 'knows', 'knew', 'known', 'knowing',
-            'take', 'takes', 'took', 'taken', 'taking',
-            'see', 'sees', 'saw', 'seen', 'seeing',
-            'come', 'comes', 'came', 'coming',
-            'look', 'looks', 'looked', 'looking',
-            'use', 'uses', 'used', 'using',
-            'find', 'finds', 'found', 'finding',
-            'give', 'gives', 'gave', 'given', 'giving',
-            'tell', 'tells', 'told', 'telling',
-            'ask', 'asks', 'asked', 'asking',
-            'work', 'works', 'worked', 'working',
-            'try', 'tries', 'tried', 'trying',
-            'feel', 'feels', 'felt', 'feeling',
-            'become', 'becomes', 'became', 'becoming',
-            'leave', 'leaves', 'left', 'leaving',
-            'put', 'puts', 'call', 'calls', 'called', 'calling',
-            'keep', 'keeps', 'kept', 'keeping',
-            'bring', 'brings', 'brought', 'bringing',
-            'begin', 'begins', 'began', 'begun', 'beginning',
-            'help', 'helps', 'helped', 'helping',
-            'show', 'shows', 'showed', 'shown', 'showing',
-            'hear', 'hears', 'heard', 'hearing',
-            'play', 'plays', 'played', 'playing',
-            'run', 'runs', 'ran', 'running',
-            'move', 'moves', 'moved', 'moving',
-            'live', 'lives', 'lived', 'living',
-            'believe', 'believes', 'believed', 'believing',
-            'bring', 'brings', 'brought', 'bringing',
-            'happen', 'happens', 'happened', 'happening',
-            'write', 'writes', 'wrote', 'written', 'writing',
-            'sit', 'sits', 'sat', 'sitting',
-            'stand', 'stands', 'stood', 'standing',
-            'lose', 'loses', 'lost', 'losing',
-            'pay', 'pays', 'paid', 'paying',
-            'meet', 'meets', 'met', 'meeting',
-            'include', 'includes', 'included', 'including',
-            'continue', 'continues', 'continued', 'continuing',
-            'set', 'sets', 'learn', 'learns', 'learned', 'learning',
-            'change', 'changes', 'changed', 'changing',
-            'lead', 'leads', 'led', 'leading',
-            'understand', 'understands', 'understood', 'understanding',
-            'watch', 'watches', 'watched', 'watching',
-            'follow', 'follows', 'followed', 'following',
-            'stop', 'stops', 'stopped', 'stopping',
-            'create', 'creates', 'created', 'creating',
-            'speak', 'speaks', 'spoke', 'spoken', 'speaking',
-            'read', 'reads', 'reading', 'allow', 'allows', 'allowed', 'allowing',
-            'add', 'adds', 'added', 'adding', 'spend', 'spends', 'spent', 'spending',
-            'grow', 'grows', 'grew', 'grown', 'growing',
-            'open', 'opens', 'opened', 'opening',
-            'walk', 'walks', 'walked', 'walking',
-            'win', 'wins', 'won', 'winning',
-            'offer', 'offers', 'offered', 'offering',
-            'remember', 'remembers', 'remembered', 'remembering',
-            'love', 'loves', 'loved', 'loving',
-            'consider', 'considers', 'considered', 'considering',
-            'appear', 'appears', 'appeared', 'appearing',
-            'buy', 'buys', 'bought', 'buying',
-            'wait', 'waits', 'waited', 'waiting',
-            'serve', 'serves', 'served', 'serving',
-            'die', 'dies', 'died', 'dying',
-            'send', 'sends', 'sent', 'sending',
-            'expect', 'expects', 'expected', 'expecting',
-            'build', 'builds', 'built', 'building',
-            'stay', 'stays', 'stayed', 'staying',
-            'fall', 'falls', 'fell', 'fallen', 'falling',
-            'cut', 'cuts', 'cutting', 'reach', 'reaches', 'reached', 'reaching',
-            'kill', 'kills', 'killed', 'killing',
-            'remain', 'remains', 'remained', 'remaining',
-            'suggest', 'suggests', 'suggested', 'suggesting',
-            'raise', 'raises', 'raised', 'raising',
-            'pass', 'passes', 'passed', 'passing',
-            'sell', 'sells', 'sold', 'selling',
-            'require', 'requires', 'required', 'requiring',
-            'report', 'reports', 'reported', 'reporting',
-            'decide', 'decides', 'decided', 'deciding',
-            'pull', 'pulls', 'pulled', 'pulling',
-
-            # 高频名词
-            'time', 'person', 'year', 'way', 'day', 'thing', 'man', 'world', 'life', 'hand',
-            'part', 'child', 'eye', 'woman', 'place', 'work', 'week', 'case', 'point',
-            'government', 'company', 'number', 'group', 'problem', 'fact', 'water', 'room',
-            'mother', 'area', 'money', 'story', 'month', 'lot', 'right', 'study', 'book',
-            'word', 'business', 'issue', 'side', 'kind', 'head', 'house', 'service', 'friend',
-            'father', 'power', 'hour', 'game', 'line', 'end', 'member', 'law', 'car', 'city',
-            'community', 'name', 'president', 'team', 'minute', 'idea', 'kid', 'body',
-            'information', 'back', 'parent', 'face', 'others', 'level', 'office', 'door',
-            'health', 'person', 'art', 'war', 'history', 'party', 'result', 'change',
-            'morning', 'reason', 'research', 'girl', 'guy', 'moment', 'air', 'teacher',
-            'force', 'education', 'age', 'policy', 'everything', 'love', 'process',
-            'music', 'market', 'sense', 'nation', 'plan', 'college', 'interest', 'death',
-            'experience', 'effect', 'class', 'control', 'care', 'field', 'development',
-            'role', 'effort', 'rate', 'heart', 'drug', 'show', 'leader', 'light', 'voice',
-            'wife', 'police', 'mind', 'price', 'report', 'decision', 'son', 'view',
-            'town', 'building', 'action', 'model', 'season', 'society', 'tax', 'player',
-            'record', 'office', 'support', 'minute', 'vote', 'value', 'center', 'figure',
-            'industry', 'table', 'death', 'course', 'food', 'project', 'activity',
-            'practice', 'relationship', 'thought', 'economy', 'theory', 'management',
-            'system', 'computer', 'media', 'fire', 'chance', 'ability', 'event', 'army',
-            'camera', 'fish', 'garden', 'red', 'oil', 'direction', 'choice', 'freedom',
-            'truth', 'phone', 'paper', 'university', 'employee', 'chief', 'congress',
-            'newspaper', 'danger', 'culture', 'presence', 'region', 'resource', 'activity',
-            'analysis', 'income', 'association', 'article', 'equipment', 'technology',
-            'opportunity', 'performance', 'security', 'committee', 'language', 'reality',
-            'version', 'majority', 'opinion', 'population', 'environment', 'variety',
-            'organization', 'hospital', 'success', 'agreement', 'disaster', 'foundation',
-            'statement', 'protection', 'attitude', 'context', 'commission', 'discussion',
-            'implication', 'administration', 'possibility', 'reaction', 'solution',
-            'resolution', 'tradition', 'application', 'conference', 'attention',
-            'attitude', 'conversation', 'expression', 'improvement', 'measurement',
-            'professional', 'satisfaction', 'significance', 'strategy', 'technology',
-
-            # 高频形容词
-            'good', 'new', 'first', 'last', 'long', 'great', 'little', 'own', 'other', 'old',
-            'right', 'big', 'high', 'different', 'small', 'large', 'next', 'early', 'young',
-            'important', 'few', 'public', 'bad', 'same', 'able', 'sure', 'free', 'real',
-            'full', 'special', 'easy', 'clear', 'recent', 'certain', 'personal', 'open',
-            'red', 'difficult', 'available', 'likely', 'short', 'single', 'medical', 'current',
-            'wrong', 'private', 'past', 'foreign', 'simple', 'concerned', 'central',
-            'difficult', 'various', 'individual', 'following', 'present', 'financial',
-            'beautiful', 'happy', 'difficult', 'significant', 'medical', 'interesting',
-            'successful', 'electrical', 'impossible', 'technical', 'normal', 'competitive',
-            'critical', 'aware', 'afraid', 'willing', 'positive', 'human', 'serious',
-            'fundamental', 'necessary', 'civil', 'additional', 'professional', 'ready',
-            'financial', 'similar', 'international', 'complete', 'recent', 'correct',
-            'healthy', 'future', 'positive', 'beautiful', 'responsible', 'separate',
-            'primary', 'global', 'useful', 'alive', 'involved', 'actual', 'advanced',
-            'capable', 'strange', 'rare', 'entire', 'excellent', 'surprised', 'conservative',
-            'pleasant', 'reasonable', 'strict', 'familiar', 'confident', 'increasing',
-            'quiet', 'slow', 'responsible', 'active', 'constant', 'independent', 'expensive',
-            'dangerous', 'guilty', 'aggressive', 'obvious', 'nervous', 'popular',
-            'wonderful', 'comfortable', 'emotional', 'suitable', 'academic', 'effective',
-            'historical', 'aware', 'helpful', 'leading', 'limited', 'natural', 'physical',
-            'scientific', 'basic', 'direct', 'existing', 'male', 'unable', 'female',
-            'massive', 'unhappy', 'unlikely', 'usual', 'visual', 'vital', 'wide',
-            'apparent', 'appropriate', 'automatic', 'collective', 'distinct', 'domestic',
-            'efficient', 'enormous', 'entirely', 'essential', 'everyday', 'evil',
-            'favorable', 'flat', 'flexible', 'formal', 'grand', 'ideal', 'illegal',
-            'intelligent', 'internal', 'legal', 'mere', 'military', 'moral', 'naked',
-            'nasty', 'naughty', 'neat', 'negative', 'nuclear', 'objective', 'odd',
-            'ordinary', 'outdoor', 'outstanding', 'overall', 'pale', 'permanent',
-            'political', 'pregnant', 'previous', 'prime', 'prior', 'professional',
-            'profound', 'prominent', 'proud', 'pure', 'rapid', 'rational', 'regional',
-            'relative', 'relevant', 'remarkable', 'respective', 'reverse', 'rough',
-            'rural', 'sacred', 'scared', 'secret', 'secure', 'select', 'sensitive',
-            'severe', 'sharp', 'short-term', 'significant', 'skilled', 'slight',
-            'social', 'solid', 'southern', 'specific', 'spiritual', 'stable', 'steady',
-            'still', 'strong', 'substantial', 'sudden', 'sufficient', 'suitable',
-            'superior', 'surprising', 'suspicious', 'sweet', 'talented', 'tall',
-            'terrible', 'thick', 'thin', 'tight', 'tiny', 'total', 'tough', 'toxic',
-            'tremendous', 'typical', 'ugly', 'ultimate', 'unexpected', 'unfair',
-            'unfortunate', 'unique', 'united', 'universal', 'unknown', 'upper',
-            'urban', 'urgent', 'used', 'useful', 'useless', 'usual', 'valuable',
-            'variable', 'various', 'vast', 'verbal', 'vertical', 'visible', 'visual',
-            'vital', 'volatile', 'vulnerable', 'weak', 'wealthy', 'weird', 'western',
-            'wet', 'whole', 'wicked', 'wide', 'widespread', 'wild', 'wise', 'wonderful',
-            'wooden', 'working', 'worldwide', 'worried', 'worse', 'worst', 'worth',
-            'worthwhile', 'worthy', 'written', 'wrong', 'yellow', 'young',
-
-            # 高频副词
-            'so', 'up', 'out', 'if', 'about', 'into', 'just', 'also', 'how', 'all', 'no',
-            'most', 'other', 'some', 'time', 'very', 'when', 'much', 'only', 'over',
-            'even', 'more', 'here', 'there', 'back', 'still', 'as', 'well', 'too',
-            'any', 'may', 'say', 'where', 'between', 'both', 'again', 'never', 'really',
-            'always', 'however', 'often', 'once', 'around', 'every', 'away', 'down',
-            'off', 'pretty', 'through', 'far', 'actually', 'probably', 'perhaps',
-            'especially', 'finally', 'quite', 'rather', 'almost', 'certainly',
-            'clearly', 'early', 'easily', 'especially', 'finally', 'generally',
-            'hardly', 'immediately', 'likely', 'mainly', 'merely', 'mostly',
-            'necessarily', 'normally', 'obviously', 'occasionally', 'particularly',
-            'possibly', 'quickly', 'rarely', 'readily', 'really', 'recently',
-            'relatively', 'seriously', 'significantly', 'simply', 'slightly',
-            'slowly', 'somehow', 'sometimes', 'somewhere', 'soon', 'specifically',
-            'strongly', 'successfully', 'suddenly', 'surely', 'totally', 'truly',
-            'twice', 'ultimately', 'undoubtedly', 'usually', 'widely',
-
-            # 高频连词
-            'and', 'but', 'or', 'yet', 'so', 'for', 'nor',
-            'although', 'because', 'before', 'unless', 'while', 'whereas',
-            'whether', 'either', 'neither', 'both', 'since', 'until', 'after',
-            'though', 'even', 'once', 'whenever', 'wherever', 'however',
-            'moreover', 'furthermore', 'therefore', 'otherwise', 'instead',
-            'meanwhile', 'nevertheless', 'nonetheless', 'notwithstanding',
-            'consequently', 'accordingly', 'thus', 'hence', 'still', 'yet',
-
-            # 计算机/技术领域
-            'app', 'api', 'web', 'net', 'data', 'code', 'file', 'user', 'server',
-            'client', 'database', 'software', 'hardware', 'network', 'system',
-            'program', 'function', 'class', 'object', 'method', 'variable',
-            'interface', 'module', 'package', 'library', 'framework', 'platform',
-            'application', 'development', 'programming', 'coding', 'debugging',
-            'testing', 'deployment', 'production', 'environment', 'version',
-            'update', 'upgrade', 'install', 'configuration', 'setting',
-            'algorithm', 'structure', 'array', 'list', 'tree', 'graph', 'stack',
-            'queue', 'heap', 'hash', 'string', 'number', 'integer', 'float',
-            'boolean', 'character', 'byte', 'bit', 'token', 'syntax', 'parser',
-            'compiler', 'interpreter', 'runtime', 'exception', 'error', 'bug',
-            'issue', 'problem', 'solution', 'feature', 'requirement', 'design',
-            'pattern', 'architecture', 'protocol', 'format', 'schema', 'model',
-            'entity', 'attribute', 'relation', 'query', 'command', 'request',
-            'response', 'event', 'callback', 'promise', 'async', 'sync',
-            'thread', 'process', 'lock', 'mutex', 'semaphore', 'signal',
-            'input', 'output', 'stream', 'buffer', 'cache', 'memory', 'disk',
-            'storage', 'device', 'driver', 'port', 'socket', 'address',
-            'protocol', 'layer', 'packet', 'frame', 'header', 'body', 'payload',
-            'encryption', 'security', 'auth', 'login', 'logout', 'session',
-            'cookie', 'token', 'key', 'certificate', 'password', 'credential',
-            'permission', 'role', 'admin', 'root', 'user', 'guest', 'owner',
-            'group', 'team', 'member', 'account', 'profile', 'settings',
-            'config', 'yaml', 'json', 'xml', 'html', 'css', 'sql', 'bash',
-            'shell', 'terminal', 'console', 'editor', 'ide', 'tool', 'git',
-            'github', 'gitlab', 'docker', 'kubernetes', 'k8s', 'cloud',
-            'aws', 'azure', 'gcp', 'lambda', 'ec2', 's3', 'bucket', 'queue',
-            'topic', 'stream', 'pipeline', 'workflow', 'job', 'task', 'cron',
-            'schedule', 'trigger', 'hook', 'event', 'log', 'metric', 'monitor',
-            'alert', 'dashboard', 'report', 'analytics', 'statistics',
-        }
-        return common_words
+        # 使用扩展词典（5000+词汇）
+        return get_extended_english_words()
 
     def _build_pinyin_dict(self) -> dict:
         """构建拼音音节词典"""
@@ -480,6 +264,11 @@ class PinyinEnglishDetector:
         if not text:
             return DetectionResult(text, 'unknown', 0.0, [])
 
+        # 检查缓存
+        cached = self._get_from_cache(text)
+        if cached:
+            return cached
+
         # 纯数字判断
         if text.isdigit():
             return DetectionResult(text, 'numeric', 1.0, [])
@@ -491,6 +280,10 @@ class PinyinEnglishDetector:
         # 计算两种语言的评分
         pinyin_score = self._calculate_pinyin_score(text)
         english_score = self._calculate_english_score(text)
+
+        # 应用用户偏好学习
+        if self.learner:
+            pinyin_score, english_score = self.learner.adjust_score(text, pinyin_score, english_score)
 
         # 归一化置信度
         total = pinyin_score + english_score
@@ -521,7 +314,12 @@ class PinyinEnglishDetector:
             {'type': 'english', 'score': round(english_score, 3), 'confidence': round(english_conf, 3)}
         ]
 
-        return DetectionResult(text, script_type, round(confidence, 3), candidates)
+        result = DetectionResult(text, script_type, round(confidence, 3), candidates)
+
+        # 添加到缓存
+        self._add_to_cache(text, result)
+
+        return result
 
 
 # CLI接口
