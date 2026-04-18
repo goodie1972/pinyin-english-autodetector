@@ -301,8 +301,12 @@ class PinyinEnglishDetector:
             script_type = 'english'
             confidence = english_conf
         else:
-            # 模糊地带，选分数高的
-            if pinyin_score >= english_score:
+            # 模糊地带，优先检查词典
+            # 如果在英文词典中，优先选英文
+            if text in self.english_words:
+                script_type = 'english'
+                confidence = english_conf
+            elif pinyin_score >= english_score:
                 script_type = 'pinyin'
                 confidence = pinyin_conf * 0.8  # 降低置信度
             else:
