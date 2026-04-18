@@ -148,8 +148,15 @@ class PinyinEnglishDetector:
             # 不能完全切分，降低分数
             return coverage * 0.5
 
-        # 规则2: 音节数量合理性
+        # 如果能完整切分为2+个音节，给予基础高分
+        # 这可以修复 "jingzhang" -> jing+zhang 被低估的问题
         num_syllables = len(syllables)
+        if num_syllables >= 2:
+            base_score = 0.9  # 多音节拼音基础分0.9
+        else:
+            base_score = 1.0  # 单音节保持1.0
+
+        # 规则2: 音节数量合理性
         avg_len = len(text) / num_syllables if num_syllables > 0 else 0
 
         # 平均每个音节2-4个字母比较合理
@@ -163,11 +170,11 @@ class PinyinEnglishDetector:
         vowel_count = sum(1 for c in text if c in vowels)
         vowel_ratio = vowel_count / len(text) if text else 0
 
-        # 拼音元音密度通常在30%-60%
-        if 0.25 <= vowel_ratio <= 0.65:
+        # 拼音元音密度通常在20%-70%（放宽范围，修复 jingzhang 问题）
+        if 0.20 <= vowel_ratio <= 0.70:
             vowel_score = 1.0
         else:
-            vowel_score = 0.7
+            vowel_score = 0.8
 
         # 规则4: 连续辅音检查（拼音中不常见）
         consonants = set('bcdfghjklmnpqrstwxyz')
@@ -181,16 +188,16 @@ class PinyinEnglishDetector:
             else:
                 current_run = 0
 
-        # 拼音中很少有连续3个以上辅音
-        if max_consonant_run <= 2:
+        # 放宽连续辅音限制（修复 jingzhang 中的 ng+zh 情况）
+        if max_consonant_run <= 3:
             consonant_score = 1.0
-        elif max_consonant_run == 3:
+        elif max_consonant_run == 4:
             consonant_score = 0.8
         else:
             consonant_score = 0.5
 
-        # 综合评分
-        final_score = syllable_score * vowel_score * consonant_score
+        # 综合评分（使用base_score作为基础）
+        final_score = base_score * syllable_score * vowel_score * consonant_score
         return final_score
 
     def _calculate_english_score(self, text: str) -> float:
@@ -312,6 +319,14 @@ class PinyinEnglishDetector:
             else:
                 script_type = 'english'
                 confidence = english_conf * 0.8
+
+        # 特殊处理：2字母歧义词，优先拼音（修复 he/an/in 等问题）
+        # 因为在中文输入法场景下，用户更可能输入拼音
+        if len(text) == 2 and script_type == 'english' and confidence < 0.6:
+            # 检查是否也是有效拼音
+            if text in self.pinyin_dict:
+                script_type = 'pinyin'
+                confidence = 0.55  # 稍微偏向拼音
 
         candidates = [
             {'type': 'pinyin', 'score': round(pinyin_score, 3), 'confidence': round(pinyin_conf, 3)},

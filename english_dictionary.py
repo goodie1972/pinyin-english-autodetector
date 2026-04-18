@@ -275,6 +275,11 @@ EXTENDED_ENGLISH_WORDS = {
     'engineer', 'engineers', 'eng',
     'frontend', 'backend', 'fullstack', 'webdev',
     'android', 'iosdev', 'mobiledev',
+
+    # 边界case修复
+    'module', 'modules', 'mod',
+    'component', 'components',
+    'package', 'packages', 'pkg',
 }
 
 def get_extended_english_words():
