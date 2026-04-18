@@ -1,0 +1,105 @@
+# 拼音/英文自动识别输入法方案
+# 基于Rime的自定义配置
+
+# 安装步骤:
+# 1. 将此文件复制到 Rime配置目录/pinyin_detector.schema.yaml
+# 2. 将 pinyin_detector_core.lua 复制到 Rime配置目录/lua/ 目录
+# 3. 将 pinyin_detector_processor.lua 复制到 Rime配置目录/lua/ 目录
+# 4. 重新部署Rime
+
+schema:
+  schema_id: pinyin_detector
+  name: 拼音英文自动识别
+  version: "1.0.0"
+  author:
+    - Claude Code
+  description: |
+    自动识别输入的拼音或英文，智能切换输入模式。
+    输入"hello"直接上屏英文，输入"nihao"显示中文候选。
+
+switches:
+  - name: ascii_mode
+    reset: 0
+    states: [ 中文, 英文 ]
+  - name: full_shape
+    states: [ 半角, 全角 ]
+  - name: simplification
+    states: [ 繁体, 简体 ]
+
+engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - table_translator@custom_phrase
+    - script_translator
+
+speller:
+  alphabet: "abcdefghijklmnopqrstuvwxyz"
+  delimiter: "'"
+  algebra:
+    # 支持全拼和简拼
+    - abbrev/^(.).+$/$1/
+    - abbrev/^(.{2}).+$/$1/
+
+translator:
+  dictionary: luna_pinyin
+  preedit_format:
+    - xform/([nl])v/$1ü/
+    - xform/([nl])ue/$1üe/
+    - xform/([jqxy])v/$1u/
+
+# 自定义短语（用于测试）
+custom_phrase:
+  dictionary: ""
+  user_dict: custom_phrase
+  db_class: stabledb
+  enable_completion: false
+  enable_sentence: false
+  initial_quality: 1
+
+# 按键绑定
+key_binder:
+  bindings:
+    - {accept: Control+p, send: toggle, toggle: simplification}
+    - {accept: Control+s, send: toggle, toggle: ascii_mode}
+    - {accept: "Shift+space", select: .next}
+
+# 识别器配置
+recognizer:
+  patterns:
+    # 邮箱地址
+    email: "^[a-z][-_.0-9a-z]*@.*$"
+    # URL
+    url: "^(www[.]|[a-z]+://).*$"
+    # 英文单词（首字母大写或小写，2-20个字母）
+    english_word: "^[a-zA-Z]{2,20}$"
+
+# Lua处理器配置（需要手动添加到 schema 配置）
+# 在 engine/processors 中添加:
+#   - lua_processor@*pinyin_detector
+#
+# 在文件顶部添加:
+#   __include: lua_config
+#
+# lua_config:
+#   lua_processor:
+#     pinyin_detector:
+#       lua_file: pinyin_detector_processor.lua
+#       function: detect_and_switch
+
+menu:
+  page_size: 9
