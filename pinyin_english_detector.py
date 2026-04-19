@@ -6,8 +6,11 @@
 
 from english_dictionary import get_extended_english_words
 from user_preference import get_learner
+from feedback_handler import get_feedback_handler
 from typing import Tuple, Optional
 from dataclasses import dataclass
+from functools import lru_cache
+import functools
 
 
 @dataclass
@@ -49,24 +52,55 @@ class PinyinEnglishDetector:
         'yi', 'wu', 'yu', 'ye', 'yue', 'yuan', 'yin', 'yun', 'ying'
     }
 
-    def __init__(self, enable_learning=True):
+    def __init__(self, enable_learning=True, enable_feedback=True):
         self.english_words = self._load_english_words()
         self.pinyin_dict = self._build_pinyin_dict()
         self.learner = get_learner() if enable_learning else None
-        # 缓存
+        self.feedback_handler = get_feedback_handler() if enable_feedback else None
+        # 缓存 - 使用LRU Cache
         self._cache = {}
         self._cache_max_size = 1000
+        self._cache_keys = []  # 用于LRU
+        # 拼音音节切分缓存
+        self._pinyin_segment_cache = {}
+        self._pinyin_segment_max_size = 500
 
     def _get_from_cache(self, text: str):
-        """从缓存获取结果"""
-        return self._cache.get(text)
+        """从缓存获取结果（LRU机制）"""
+        if text in self._cache:
+            # 更新LRU顺序
+            self._cache_keys.remove(text)
+            self._cache_keys.append(text)
+            return self._cache[text]
+        return None
 
     def _add_to_cache(self, text: str, result):
-        """添加结果到缓存"""
-        if len(self._cache) >= self._cache_max_size:
-            # 简单LRU：清空一半缓存
-            self._cache = dict(list(self._cache.items())[self._cache_max_size//2:])
+        """添加结果到缓存（LRU机制）"""
+        if self._cache_max_size <= 0:
+            return  # 缓存被禁用
+        if text in self._cache:
+            # 已存在，更新位置
+            self._cache_keys.remove(text)
+        elif len(self._cache) >= self._cache_max_size:
+            # 淘汰最久未使用的
+            oldest = self._cache_keys.pop(0)
+            del self._cache[oldest]
+        # 添加到缓存
         self._cache[text] = result
+        self._cache_keys.append(text)
+
+    def _get_pinyin_segment_from_cache(self, text: str):
+        """从缓存获取拼音切分结果"""
+        return self._pinyin_segment_cache.get(text)
+
+    def _add_pinyin_segment_to_cache(self, text: str, result):
+        """添加拼音切分结果到缓存"""
+        if len(self._pinyin_segment_cache) >= self._pinyin_segment_max_size:
+            # 简单清理：删除前一半
+            keys = list(self._pinyin_segment_cache.keys())
+            for key in keys[:len(keys)//2]:
+                del self._pinyin_segment_cache[key]
+        self._pinyin_segment_cache[text] = result
 
     def _load_english_words(self) -> set:
         """加载常用英文单词词典"""
@@ -102,6 +136,12 @@ class PinyinEnglishDetector:
         返回: (音节列表, 覆盖率)
         """
         text = text.lower()
+
+        # 检查缓存
+        cached = self._get_pinyin_segment_from_cache(text)
+        if cached:
+            return cached
+
         n = len(text)
 
         # 动态规划求解最优切分
@@ -123,6 +163,7 @@ class PinyinEnglishDetector:
 
         if dp[n][0] != float('inf'):
             coverage = 1.0
+            result = (dp[n][1], coverage)
         else:
             # 部分匹配，计算覆盖率
             # 找到最长匹配前缀
@@ -133,9 +174,11 @@ class PinyinEnglishDetector:
                     coverage = i / n
                     matched_prefix_len = i
                     break
-            return dp[matched_prefix_len][1] if matched_prefix_len > 0 else [], coverage
+            result = (dp[matched_prefix_len][1] if matched_prefix_len > 0 else [], coverage)
 
-        return dp[n][1], coverage
+        # 保存到缓存
+        self._add_pinyin_segment_to_cache(text, result)
+        return result
 
     def _calculate_pinyin_score(self, text: str) -> float:
         """计算文本是拼音的评分 (0-1)"""
@@ -280,8 +323,8 @@ class PinyinEnglishDetector:
         if text.isdigit():
             return DetectionResult(text, 'numeric', 1.0, [])
 
-        # 包含非字母字符，可能是mixed
-        if not text.isalpha():
+        # 包含非字母字符或非ASCII字符，可能是mixed
+        if not text.isalpha() or not text.isascii():
             return DetectionResult(text, 'mixed', 0.5, [])
 
         # 计算两种语言的评分
@@ -291,6 +334,10 @@ class PinyinEnglishDetector:
         # 应用用户偏好学习
         if self.learner:
             pinyin_score, english_score = self.learner.adjust_score(text, pinyin_score, english_score)
+
+        # 应用用户反馈调整
+        if self.feedback_handler:
+            pinyin_score, english_score = self.feedback_handler.adjust_score(text, pinyin_score, english_score)
 
         # 归一化置信度
         total = pinyin_score + english_score
